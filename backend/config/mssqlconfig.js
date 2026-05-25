@@ -12,6 +12,13 @@ const config = {
     password: process.env.DB_PASSWORD || 'Rathi@0969',
     server: dbServer,
     database: process.env.DB_NAME || 'TMS_Database',
+    requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT || 120000),
+    connectionTimeout: Number(process.env.DB_CONNECTION_TIMEOUT || 30000),
+    pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000,
+    },
     options: {
         trustServerCertificate: process.env.DB_TRUST_CERTIFICATE
             ? process.env.DB_TRUST_CERTIFICATE === 'true'
@@ -35,6 +42,9 @@ const connectDB = async () => {
         poolPromise = sql.connect(config)
             .then((pool) => {
                 console.log(`SQL Server connected: ${config.server}/${config.database}`);
+                pool.on('error', (err) => {
+                    console.error('SQL pool error:', err.message);
+                });
                 return pool;
             })
             .catch((err) => {

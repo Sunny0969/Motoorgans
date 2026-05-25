@@ -14,12 +14,12 @@ router.route('/')
   .get(getCustomers)
   .post(createCustomer);
 
+router.route('/search/:query')
+  .get(searchCustomers);
+
 router.route('/:id')
   .get(getCustomer)
   .put(updateCustomer)
   .delete(deleteCustomer);
-
-router.route('/search/:query')
-  .get(searchCustomers);
 
 module.exports = router;

@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   getPurchases,
   getPurchase,
+  getLatestPurchase,
   createPurchase,
   updatePurchase,
   deletePurchase,
@@ -10,8 +11,9 @@ const {
 } = require('../controllers/purchaseController');
 
 // Routes
+router.get('/latest', getLatestPurchase);
+router.get('/search/:query', searchPurchases);
 router.route('/').get(getPurchases).post(createPurchase);
 router.route('/:id').get(getPurchase).put(updatePurchase).delete(deletePurchase);
-router.route('/search/:query').get(searchPurchases);
 
 module.exports = router;

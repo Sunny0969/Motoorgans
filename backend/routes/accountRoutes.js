@@ -12,8 +12,8 @@ const {
 
 // Routes
 router.route('/').get(getAccounts).post(createAccount);
-router.route('/:id').get(getAccount).put(updateAccount).delete(deleteAccount);
 router.route('/search/:query').get(searchAccounts);
 router.route('/type/:type').get(getAccountsByType);
+router.route('/:id').get(getAccount).put(updateAccount).delete(deleteAccount);
 
 module.exports = router;

@@ -39,7 +39,6 @@ const transactionClassSchema = new mongoose.Schema({
 
 // Index for efficient searching
 transactionClassSchema.index({ className: 1 });
-transactionClassSchema.index({ code: 1 });
 transactionClassSchema.index({ category: 1 });
 transactionClassSchema.index({ status: 1 });
 
