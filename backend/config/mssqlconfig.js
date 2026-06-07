@@ -11,7 +11,7 @@ const config = {
     user: process.env.DB_USER || 'sa',
     password: process.env.DB_PASSWORD || 'Rathi@0969',
     server: dbServer,
-    database: process.env.DB_NAME || 'TMS_Database',
+    database: process.env.DB_NAME || 'TMSLatestNew',
     requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT || 120000),
     connectionTimeout: Number(process.env.DB_CONNECTION_TIMEOUT || 30000),
     pool: {

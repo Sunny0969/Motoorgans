@@ -9,6 +9,7 @@ const {
   searchSaleByInvoice,
   fetchCustomerBalance,
   fetchSaleByDoc,
+  fetchLatestSale,
 } = require('../utils/mssqlRepository');
 
 router.route('/').get(async (req, res) => {
@@ -66,6 +67,17 @@ router.route('/product-sold-history/:customerId/:productId').get(async (req, res
     res.json(history);
   } catch (err) {
     console.error('Error fetching product sold history:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+router.get('/latest', async (req, res) => {
+  try {
+    const sale = await fetchLatestSale();
+    if (!sale) return res.status(404).json({ message: 'No sales found' });
+    res.json(sale);
+  } catch (err) {
+    console.error('Error fetching latest sale:', err);
     res.status(500).json({ message: err.message });
   }
 });

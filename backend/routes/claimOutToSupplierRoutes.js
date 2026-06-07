@@ -1,23 +1,22 @@
 const express = require('express');
 const router = express.Router();
-const claimController = require('../controllers/claimOutToSupplierController');
+const {
+  getClaims,
+  getClaim,
+  getLatest,
+  getNextNumber,
+  getSupplierBalance,
+  createClaim,
+  updateClaim,
+  deleteClaim,
+  searchClaims,
+} = require('../controllers/claimOutToSupplierController');
 
-// Create a new claim out to supplier
-router.post('/claims-out-to-supplier', claimController.createClaim);
-
-// Get all claims out to supplier
-router.get('/claims-out-to-supplier', claimController.getAllClaims);
-
-// Get a specific claim by ID
-router.get('/claims-out-to-supplier/:id', claimController.getClaimById);
-
-// Update a claim
-router.put('/claims-out-to-supplier/:id', claimController.updateClaim);
-
-// Delete a claim
-router.delete('/claims-out-to-supplier/:id', claimController.deleteClaim);
-
-// Update claim status
-router.patch('/claims-out-to-supplier/:id/status', claimController.updateClaimStatus);
+router.get('/latest', getLatest);
+router.get('/next-number', getNextNumber);
+router.get('/search/:query', searchClaims);
+router.get('/supplier/:id/balance', getSupplierBalance);
+router.route('/').get(getClaims).post(createClaim);
+router.route('/:id').get(getClaim).put(updateClaim).delete(deleteClaim);
 
 module.exports = router;

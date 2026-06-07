@@ -6,7 +6,7 @@ const config = {
     password: "MyStrongPassword123!",
     server: "localhost\\SQLEXPRESS",
     port: 1433,
-    database: "TMSLatest",
+    database: "TMSLatestNew",
     options: {
         encrypt: false,
         trustServerCertificate: true

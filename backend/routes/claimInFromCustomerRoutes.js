@@ -1,33 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const {
-  getClaimsInFromCustomer,
-  getClaimInFromCustomer,
-  createClaimInFromCustomer,
-  updateClaimInFromCustomer,
-  deleteClaimInFromCustomer,
-  searchClaimsInFromCustomer,
-  getClaimsByStatus,
-  getClaimsByCustomer
+  getClaims,
+  getClaim,
+  getLatest,
+  getNextNumber,
+  getCustomerBalance,
+  createClaim,
+  updateClaim,
+  deleteClaim,
+  searchClaims,
 } = require('../controllers/claimInFromCustomerController');
 
-// Routes
-router.route('/')
-  .get(getClaimsInFromCustomer)
-  .post(createClaimInFromCustomer);
-
-router.route('/:id')
-  .get(getClaimInFromCustomer)
-  .put(updateClaimInFromCustomer)
-  .delete(deleteClaimInFromCustomer);
-
-router.route('/search/:query')
-  .get(searchClaimsInFromCustomer);
-
-router.route('/status/:status')
-  .get(getClaimsByStatus);
-
-router.route('/customer/:customerId')
-  .get(getClaimsByCustomer);
+router.get('/latest', getLatest);
+router.get('/next-number', getNextNumber);
+router.get('/search/:query', searchClaims);
+router.get('/customer/:id/balance', getCustomerBalance);
+router.route('/').get(getClaims).post(createClaim);
+router.route('/:id').get(getClaim).put(updateClaim).delete(deleteClaim);
 
 module.exports = router;

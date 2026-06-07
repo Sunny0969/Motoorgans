@@ -1,151 +1,122 @@
-const ClaimOutToSupplier = require('../models/ClaimOutToSupplier');
+const {
+  fetchClaimOutHeaders,
+  fetchClaimOutByDoc,
+  fetchLatestClaimOut,
+  createClaimOut,
+  updateClaimOut,
+  deleteClaimOut,
+  fetchNextClaimOutDoc,
+  fetchSupplierBalance,
+} = require('../utils/mssqlRepository');
 
-// Create a new claim out to supplier
-exports.createClaim = async (req, res) => {
+const getClaims = async (req, res) => {
   try {
-    const claimData = req.body;
+    const headers = await fetchClaimOutHeaders(15);
+    const list = await Promise.all(headers.map((h) => fetchClaimOutByDoc(h.Doc)));
+    res.json(list.filter(Boolean));
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
-    // Calculate totals
-    const totalItems = claimData.items.length;
-    const totalClaimedQty = claimData.items.reduce((sum, item) => sum + (parseFloat(item.claimedQty) || 0), 0);
-    const totalClaimAmount = claimData.items.reduce((sum, item) => sum + (parseFloat(item.claimAmount) || 0), 0);
+const getClaim = async (req, res) => {
+  try {
+    const row = await fetchClaimOutByDoc(req.params.id);
+    if (!row) return res.status(404).json({ message: 'Claim out not found' });
+    res.json(row);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
-    claimData.summary = {
-      totalItems,
-      totalClaimedQty,
-      totalClaimAmount,
-      settlementAmount: totalClaimAmount
-    };
+const getLatest = async (req, res) => {
+  try {
+    const row = await fetchLatestClaimOut();
+    if (!row) return res.status(404).json({ message: 'No claim out vouchers found' });
+    res.json(row);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
-    const claim = new ClaimOutToSupplier(claimData);
-    await claim.save();
+const getNextNumber = async (req, res) => {
+  try {
+    const nextDoc = await fetchNextClaimOutDoc();
+    res.json({ nextDoc, invoiceNo: String(nextDoc) });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
+const getSupplierBalance = async (req, res) => {
+  try {
+    const balance = await fetchSupplierBalance(req.params.id);
+    res.json({ balance });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const createClaim = async (req, res) => {
+  try {
+    const saved = await createClaimOut(req.body);
     res.status(201).json({
-      message: 'Claim out to supplier created successfully',
-      claim
+      message: `Claim Out #${saved.invoiceNo || saved.id} saved successfully.`,
+      ...saved,
     });
   } catch (error) {
-    console.error('Error creating claim:', error);
-    res.status(500).json({
-      message: 'Error creating claim',
-      error: error.message
-    });
+    console.error('Error creating claim out:', error);
+    res.status(500).json({ message: 'Failed to save: ' + error.message });
   }
 };
 
-// Get all claims out to supplier
-exports.getAllClaims = async (req, res) => {
+const updateClaim = async (req, res) => {
   try {
-    const claims = await ClaimOutToSupplier.find().sort({ createdAt: -1 });
-    res.status(200).json(claims);
-  } catch (error) {
-    console.error('Error fetching claims:', error);
-    res.status(500).json({
-      message: 'Error fetching claims',
-      error: error.message
+    const saved = await updateClaimOut(req.params.id, req.body);
+    res.json({
+      message: `Claim Out #${saved.invoiceNo || saved.id} updated successfully.`,
+      ...saved,
     });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
 
-// Get a specific claim by ID
-exports.getClaimById = async (req, res) => {
+const deleteClaim = async (req, res) => {
   try {
-    const claim = await ClaimOutToSupplier.findById(req.params.id);
-    if (!claim) {
-      return res.status(404).json({ message: 'Claim not found' });
-    }
-    res.status(200).json(claim);
+    await deleteClaimOut(req.params.id);
+    res.json({ success: true, message: `Claim Out #${req.params.id} deleted.` });
   } catch (error) {
-    console.error('Error fetching claim:', error);
-    res.status(500).json({
-      message: 'Error fetching claim',
-      error: error.message
-    });
+    res.status(500).json({ message: error.message });
   }
 };
 
-// Update a claim
-exports.updateClaim = async (req, res) => {
+const searchClaims = async (req, res) => {
   try {
-    const claimData = req.body;
-
-    // Recalculate totals if items are updated
-    if (claimData.items) {
-      const totalItems = claimData.items.length;
-      const totalClaimedQty = claimData.items.reduce((sum, item) => sum + (parseFloat(item.claimedQty) || 0), 0);
-      const totalClaimAmount = claimData.items.reduce((sum, item) => sum + (parseFloat(item.claimAmount) || 0), 0);
-
-      claimData.summary = {
-        totalItems,
-        totalClaimedQty,
-        totalClaimAmount,
-        settlementAmount: totalClaimAmount
-      };
-    }
-
-    const claim = await ClaimOutToSupplier.findByIdAndUpdate(
-      req.params.id,
-      claimData,
-      { new: true, runValidators: true }
+    const query = req.params.query.toLowerCase();
+    const headers = await fetchClaimOutHeaders(200);
+    const matches = headers.filter((row) => {
+      const invoice = row.invoice != null ? String(row.invoice).toLowerCase() : '';
+      const doc = String(row.Doc).toLowerCase();
+      return invoice.includes(query) || doc.includes(query);
+    });
+    const list = await Promise.all(
+      matches.slice(0, 10).map((h) => fetchClaimOutByDoc(h.Doc)),
     );
-
-    if (!claim) {
-      return res.status(404).json({ message: 'Claim not found' });
-    }
-
-    res.status(200).json({
-      message: 'Claim updated successfully',
-      claim
-    });
+    res.json(list.filter(Boolean));
   } catch (error) {
-    console.error('Error updating claim:', error);
-    res.status(500).json({
-      message: 'Error updating claim',
-      error: error.message
-    });
+    res.status(500).json({ message: error.message });
   }
 };
 
-// Delete a claim
-exports.deleteClaim = async (req, res) => {
-  try {
-    const claim = await ClaimOutToSupplier.findByIdAndDelete(req.params.id);
-    if (!claim) {
-      return res.status(404).json({ message: 'Claim not found' });
-    }
-    res.status(200).json({ message: 'Claim deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting claim:', error);
-    res.status(500).json({
-      message: 'Error deleting claim',
-      error: error.message
-    });
-  }
-};
-
-// Update claim status
-exports.updateClaimStatus = async (req, res) => {
-  try {
-    const { status } = req.body;
-    const claim = await ClaimOutToSupplier.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true }
-    );
-
-    if (!claim) {
-      return res.status(404).json({ message: 'Claim not found' });
-    }
-
-    res.status(200).json({
-      message: 'Claim status updated successfully',
-      claim
-    });
-  } catch (error) {
-    console.error('Error updating claim status:', error);
-    res.status(500).json({
-      message: 'Error updating claim status',
-      error: error.message
-    });
-  }
+module.exports = {
+  getClaims,
+  getClaim,
+  getLatest,
+  getNextNumber,
+  getSupplierBalance,
+  createClaim,
+  updateClaim,
+  deleteClaim,
+  searchClaims,
 };

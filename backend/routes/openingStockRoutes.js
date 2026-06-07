@@ -1,33 +1,29 @@
 const express = require('express');
 const router = express.Router();
-const openingStockController = require('../controllers/openingStockController');
-const auth = require('../middleware/auth');
+const {
+  getNextNumber,
+  getLatest,
+  getAllOpeningStocks,
+  getOpeningStockById,
+  getLocations,
+  getProduct,
+  createOpeningStock,
+  updateOpeningStock,
+  deleteOpeningStock,
+} = require('../controllers/openingStockController');
 
-// All routes require authentication
-router.use(auth);
+router.get('/next-number', getNextNumber);
+router.get('/latest', getLatest);
+router.get('/locations', getLocations);
+router.get('/product/:productId', getProduct);
 
-// Get all opening stock entries
-router.get('/', openingStockController.getAllOpeningStocks);
+router.route('/')
+  .get(getAllOpeningStocks)
+  .post(createOpeningStock);
 
-// Get opening stock by ID
-router.get('/:id', openingStockController.getOpeningStockById);
-
-// Create new opening stock entry
-router.post('/', openingStockController.createOpeningStock);
-
-// Update opening stock entry
-router.put('/:id', openingStockController.updateOpeningStock);
-
-// Delete opening stock entry
-router.delete('/:id', openingStockController.deleteOpeningStock);
-
-// Get products for dropdown
-router.get('/products/dropdown', openingStockController.getProductsForDropdown);
-
-// Import opening stock from Excel
-router.post('/import', openingStockController.importOpeningStock);
-
-// Export opening stock to Excel
-router.get('/:id/export', openingStockController.exportOpeningStock);
+router.route('/:doc')
+  .get(getOpeningStockById)
+  .put(updateOpeningStock)
+  .delete(deleteOpeningStock);
 
 module.exports = router;

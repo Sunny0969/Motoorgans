@@ -33,17 +33,27 @@ exports.createAccount = async (req, res) => {
     const pool = await connectDB();
     const fields = mapAccountBodyToCoa(req.body);
 
-    const duplicate = await pool
-      .request()
-      .input('code', sql.NVarChar, fields.code)
-      .query('SELECT Id FROM COA WHERE code = @code');
+    if (!fields.Subsidary || fields.Subsidary.trim() === '') {
+      return res.status(400).json({ message: 'Account Title is required' });
+    }
 
-    if (duplicate.recordset.length > 0) {
-      return res.status(400).json({ message: 'Account with this code already exists' });
+    if (fields.code && fields.code.trim() !== '') {
+      const duplicate = await pool
+        .request()
+        .input('code', sql.NVarChar, fields.code)
+        .query('SELECT Id FROM COA WHERE code = @code');
+
+      if (duplicate.recordset.length > 0) {
+        return res.status(400).json({ message: 'Account with this code already exists' });
+      }
     }
 
     const nextIdResult = await pool.request().query('SELECT ISNULL(MAX(Id), 0) + 1 AS nextId FROM COA');
     const nextId = nextIdResult.recordset[0].nextId;
+
+    if (!fields.code || fields.code.trim() === '') {
+      fields.code = String(nextId);
+    }
 
     await pool
       .request()

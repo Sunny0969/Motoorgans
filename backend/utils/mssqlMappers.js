@@ -1,13 +1,27 @@
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const AC_TYPE_TO_LABEL = {
+  1: 'Assets',
+  2: 'Intangible Assets',
   5: 'Debtors, Buyers, Customers, Clients',
+  10: 'Cash & Bank',
+  11: 'Capital / Share Holders',
   15: 'Creditors, Suppliers, Vendors',
+  25: 'Wages, Salaries and Benefits',
+  29: 'Expenses',
+  31: 'Liabilities',
 };
 
 const LABEL_TO_AC_TYPE = {
   'Debtors, Buyers, Customers, Clients': 5,
   'Creditors, Suppliers, Vendors': 15,
+  'Assets': 1,
+  'Intangible Assets': 2,
+  'Cash & Bank': 10,
+  'Capital / Share Holders': 11,
+  'Wages, Salaries and Benefits': 25,
+  'Expenses': 29,
+  'Liabilities': 31,
 };
 
 function formatDisplayDate(value) {
@@ -15,6 +29,12 @@ function formatDisplayDate(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return `${date.getDate()}-${MONTHS[date.getMonth()]}-${String(date.getFullYear()).slice(-2)}`;
+}
+
+function resolveSaleInvoiceNo(row) {
+  const inv = row.invoice != null ? String(row.invoice).trim() : '';
+  if (!inv || inv === '0') return String(row.Doc);
+  return inv;
 }
 
 function buildAccountTitle(row) {
@@ -74,6 +94,13 @@ function mapCoaRowToSupplier(row) {
   };
 }
 
+function toInputDate(value) {
+  if (!value) return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().split('T')[0];
+}
+
 function mapProductRowToApi(row) {
   return {
     _id: String(row.ID),
@@ -84,6 +111,7 @@ function mapProductRowToApi(row) {
     company: row.Company || '',
     category: row.Category || '',
     category2: row.category2 || '',
+    country: row.country || '',
     unit: row.Size || 'PCS',
     uom: row.Size || 'PCS',
     packing: row.Packing ?? 0,
@@ -95,6 +123,7 @@ function mapProductRowToApi(row) {
     openingQty: row.OQty ?? 0,
     batch: row.Batch || '',
     openingDate: formatDisplayDate(row.ODate),
+    openingDateInput: toInputDate(row.ODate),
     schRate: row.SchRate ?? 0,
     schPc: row.SchPc ?? 0,
     price: row.SaleRate ?? row.PurchaseRate ?? 0,
@@ -102,7 +131,45 @@ function mapProductRowToApi(row) {
     stock: row.OQty ?? 0,
     location: row.location || '',
     reorderLevel: row.ReOrder ?? 0,
+    discount: row.discount ?? 0,
+    openingCost: row.openingrate ?? row.PurchaseRate ?? 0,
     isActive: row.isactive === null || row.isactive === undefined ? true : Boolean(row.isactive),
+  };
+}
+
+function mapProductBodyToDb(body) {
+  let oDate = new Date();
+  if (body.openingDate) {
+    const parsed = Date.parse(body.openingDate);
+    if (!Number.isNaN(parsed)) oDate = new Date(parsed);
+  }
+
+  return {
+    Company: (body.company || '').trim(),
+    Category: (body.category || '').trim(),
+    category2: (body.category2 || '').trim(),
+    country: (body.country || '').trim(),
+    Name: (body.name || '').trim(),
+    UrduName: (body.urduName || '').trim(),
+    Size: (body.unit || body.uom || 'PCS').trim() || 'PCS',
+    Packing: Number(body.packing) || 0,
+    PurchaseRate: Number(body.purchaseRate) || 0,
+    SaleRate: Number(body.saleRate) || 0,
+    SaleRate2: Number(body.saleRate2) || 0,
+    SaleRate3: Number(body.saleRate3) || 0,
+    SaleRate4: Number(body.saleRate4) || 0,
+    OQty: Number(body.openingQty) || 0,
+    Batch: body.batch || '',
+    ODate: oDate,
+    code: body.code != null ? String(body.code).trim() : '',
+    SchRate: Number(body.schRate) || 0,
+    SchPc: Number(body.schPc) || 0,
+    ReOrder: Number(body.reorderLevel) || 0,
+    discount: Number(body.discount) || 0,
+    location: body.location || '',
+    openingrate: Number(body.openingCost) || Number(body.purchaseRate) || 0,
+    isactive:
+      body.isActive === false || body.isActive === 'false' || body.isActive === 0 ? 0 : 1,
   };
 }
 
@@ -119,6 +186,7 @@ function mapPurchaseHeader(row, supplier) {
     date: formatDisplayDate(row.Date),
     paymentType: row.Term === 'Credit' ? 'Credit' : 'Cash',
     supplier: supplierLabel,
+    supplierId: row.Acid != null ? row.Acid : null,
     supplierCode,
     supplierName,
     creditDays: row.CreditDays != null ? String(row.CreditDays) : '',
@@ -148,6 +216,7 @@ function mapPurchaseLineRow(row) {
   const net = parseFloat(row.VIST) || amount - discount;
 
   return {
+    productId: row.Prid != null ? row.Prid : null,
     productCode: row.productCode != null ? String(row.productCode) : String(row.Prid),
     productName: row.productName || `Product ${row.Prid}`,
     remarks: row.comments || row.remarks || '',
@@ -164,12 +233,27 @@ function mapPurchaseLineRow(row) {
   };
 }
 
+function parseBalanceDate(dateStr) {
+  if (!dateStr) return new Date();
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) return d;
+  const parts = dateStr.match(/(\d+)-(\w+)-(\d+)/);
+  if (parts) {
+    const day = parseInt(parts[1]);
+    const monthIdx = MONTHS.findIndex(m => m.toLowerCase() === parts[2].toLowerCase());
+    let year = parseInt(parts[3]);
+    if (year < 100) year += 2000;
+    if (monthIdx >= 0) return new Date(year, monthIdx, day);
+  }
+  return new Date();
+}
+
 function mapAccountBodyToCoa(body) {
   const balanceType = body.balanceType === 'Payable' ? 'Credit' : 'Debit';
   return {
     Subsidary: body.accountTitle,
     UrduName: body.urduTitle || '',
-    code: body.code,
+    code: body.code || '',
     ACType: LABEL_TO_AC_TYPE[body.accountType] ?? 5,
     ledgerno: body.ledgerNo || '',
     discount: Number(body.discountPercent) || 0,
@@ -184,7 +268,7 @@ function mapAccountBodyToCoa(body) {
     City: body.city || '',
     EMail: body.email || '',
     Balance: Number(body.openingBalance) || 0,
-    Balance_Date: body.balanceDate ? new Date(body.balanceDate) : new Date(),
+    Balance_Date: parseBalanceDate(body.balanceDate),
     Status: balanceType,
     isactive: body.isActive === false || body.isActive === 'false' ? 0 : 1,
   };
@@ -332,8 +416,8 @@ function mapSaleHeader(row, customer = null) {
     _id: String(row.Doc),
     id: row.Doc,
     customerId: row.Acid != null ? String(row.Acid) : '',
-    invoiceNumber: row.invoice != null ? String(row.invoice) : String(row.Doc),
-    invoiceNo: row.invoice != null ? String(row.invoice) : String(row.Doc),
+    invoiceNumber: resolveSaleInvoiceNo(row),
+    invoiceNo: resolveSaleInvoiceNo(row),
     date: formatDisplayDate(row.Date),
     paymentType: row.Term === 'Credit' ? 'Credit' : 'Cash',
     selectBuyer: customer?.id != null ? String(customer.id) : '',
@@ -368,6 +452,7 @@ function mapSaleLineRow(row) {
     productId: String(row.Prid),
     productCode: row.productCode != null ? String(row.productCode) : String(row.Prid),
     productName: row.productName || `Product ${row.Prid}`,
+    urduName: row.urduName || row.UrduName || '',
     uom: row.uom || 'PCS',
     pcs: String(qty),
     rate: String(rate),
@@ -375,6 +460,12 @@ function mapSaleLineRow(row) {
     discPercent: row.DiscP != null ? String(row.DiscP) : '',
     discount: discount.toFixed(2),
     netAmount: net.toFixed(2),
+    purchaseRate: row.purchaseRate != null ? String(row.purchaseRate) : (row.PurchaseRate != null ? String(row.PurchaseRate) : '0'),
+    packingSize: row.packingSize != null && row.packingSize !== ''
+      ? String(row.packingSize)
+      : (row.Packing != null && row.Packing !== '' ? String(row.Packing) : ''),
+    packQty: row.Packet != null ? String(row.Packet) : '',
+    packing: row.Packet != null ? String(row.Packet) : '',
     availableStock: row.stock ?? 0,
     remarks: row.comments || '',
   };
@@ -386,6 +477,7 @@ module.exports = {
   mapCoaRowToSupplier,
   mapCoaRowToCustomer,
   mapProductRowToApi,
+  mapProductBodyToDb,
   mapProductRowToItem,
   mapStockRow,
   mapProductHistoryRow,
@@ -394,6 +486,7 @@ module.exports = {
   mapPurchaseLineRow,
   mapSaleHeader,
   mapSaleLineRow,
+  resolveSaleInvoiceNo,
   mapAccountBodyToCoa,
   SUPPLIER_AC_TYPE: 15,
   CUSTOMER_AC_TYPE: 5,

@@ -1,7 +1,10 @@
 const http = require('http');
+const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const { initializeDatabase, testConnection, closeDB } = require('./config/database');
+const { startBackupScheduler } = require('./services/backupScheduler');
 
 const app = express();
 const HOST = process.env.HOST || '127.0.0.1';
@@ -62,10 +65,16 @@ const setupRoutes = () => {
     }
   });
 
-  app.use('/api/suppliers', require('./routes/supplierRoutes'));
+  app.use('/api/backup', require('./routes/backupRoutes'));
+  console.log('  ✓ Database backup: POST /api/backup');
+
   app.use('/api/products', require('./routes/productRoutes'));
   app.use('/api/purchases', require('./routes/purchaseRoutes'));
+  app.use('/api/purchase-returns', require('./routes/purchaseReturnRoutes'));
+  console.log('  ✓ Purchase returns: /api/purchase-returns');
   app.use('/api/sales', require('./routes/saleRoutes'));
+  app.use('/api/sale-returns', require('./routes/saleReturnRoutes'));
+  console.log('  ✓ Sale returns: /api/sale-returns');
   app.use('/api/accounts', require('./routes/accountRoutes'));
   app.use('/api/employees', require('./routes/employeeRoutes'));
   app.use('/api/vouchers', require('./routes/voucherRoutes'));
@@ -77,6 +86,8 @@ const setupRoutes = () => {
   app.use('/api/rates', require('./routes/rateRoutes'));
   app.use('/api/bom', require('./routes/billOfMaterialRoutes'));
   app.use('/api/customers', require('./routes/customerRoutes'));
+  app.use('/api/suppliers', require('./routes/supplierRoutes'));
+  console.log('  ✓ Suppliers: /api/suppliers');
   app.use('/api/stock', require('./routes/stockRoutes'));
   app.use('/api/product-history', require('./routes/productHistoryRoutes'));
   app.use('/api/ps-detail', require('./routes/psDetailRoutes'));
@@ -86,19 +97,34 @@ const setupRoutes = () => {
   app.use('/api/temp-stock', require('./routes/tempStockRoutes'));
   app.use('/api/temp-pnl', require('./routes/tempPnLRoutes'));
   app.use('/api/companies', require('./routes/companyRoutes'));
+  app.use('/api/dashboard', require('./routes/dashboardRoutes'));
   console.log('  ✓ TMS modules: /api/temp-acbal, /api/temp-ledger, /api/temp-stock, /api/temp-pnl, /api/companies');
   app.use('/api/sales-invoice', require('./routes/salesInvoiceRoutes'));
   app.use('/api/sms', require('./routes/smsRoutes'));
   app.use('/api/font-settings', require('./routes/fontSettingsRoutes'));
   app.use('/api/locations', require('./routes/locationRoutes'));
   app.use('/api/cheque-transfers', require('./routes/chequeTransferRoutes'));
+  app.use('/api/salary-slips', require('./routes/salarySlipRoutes'));
+  console.log('  ✓ Salary slip: /api/salary-slips');
+  app.use('/api/journal-vouchers', require('./routes/journalVoucherRoutes'));
+  console.log('  ✓ Journal voucher: /api/journal-vouchers');
   app.use('/api/claims-in-from-customer', require('./routes/claimInFromCustomerRoutes'));
+  console.log('  ✓ Claim in from customer: /api/claims-in-from-customer');
   app.use('/api/claims-out-to-supplier', require('./routes/claimOutToSupplierRoutes'));
+  console.log('  ✓ Claim out to supplier: /api/claims-out-to-supplier');
   app.use('/api/transaction-classes', require('./routes/transactionClassRoutes'));
   app.use('/api/contact-groups', require('./routes/contactGroupRoutes'));
   app.use('/api/sale-orders', require('./routes/saleOrderRoutes'));
   app.use('/api/day-close', require('./routes/dayCloseRoutes'));
   app.use('/api/demand-orders', require('./routes/demandOrderRoutes'));
+  app.use('/api/opening-stock', require('./routes/openingStockRoutes'));
+  console.log('  ✓ Opening stock: /api/opening-stock');
+  app.use('/api/exchanges', require('./routes/exchangeRoutes'));
+  console.log('  ✓ Exchange: /api/exchanges');
+  console.log('  ✓ Stock transfer: /api/stock-transfers (SQL)');
+  console.log('  ✓ Stock adjustment: /api/stock-adjustments (SQL)');
+  app.use('/api/purchase-orders', require('./routes/purchaseOrderRoutes'));
+  console.log('  ✓ Purchase order: /api/purchase-orders (SQL)');
   app.use('/api/event-logs', require('./routes/eventLogRoutes'));
   app.use('/api/expenses', require('./routes/expenseRoutes'));
   app.use('/api/monthly-transaction-reports', require('./routes/monthlyTransactionReportRoutes'));
@@ -120,6 +146,22 @@ const setupRoutes = () => {
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     });
   });
+
+  const buildPath = path.join(__dirname, '../myapp/build');
+  const indexHtml = path.join(buildPath, 'index.html');
+
+  if (fs.existsSync(indexHtml)) {
+    app.use(express.static(buildPath));
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api')) {
+        return next();
+      }
+      res.sendFile(indexHtml);
+    });
+    console.log('  ✓ React app: serving static files from myapp/build');
+  } else {
+    console.log('  ⚠ React build not found — run: cd myapp && npm run build');
+  }
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Route not found', path: req.path });
@@ -156,6 +198,8 @@ const startServer = async () => {
 
   await verifyOurServer(PORT);
 
+  startBackupScheduler();
+
   const dbName = app.locals.dbInfo?.databaseName || 'Unknown';
   const dbServer = app.locals.dbInfo?.serverName || 'Unknown';
 
@@ -163,7 +207,17 @@ const startServer = async () => {
   console.log(`📊 Database: SQL Server (${dbName} @ ${dbServer})`);
   console.log(`🌐 Health: http://${HOST}:${PORT}/api/health`);
   console.log(`📦 Products: http://${HOST}:${PORT}/api/products`);
+  if (fs.existsSync(path.join(__dirname, '../myapp/build/index.html'))) {
+    console.log(`🖥️  App UI: http://${HOST}:${PORT}/`);
+  }
   console.log('Keep this terminal open. Press Ctrl+C to stop.');
+
+  if (process.env.NODE_ENV === 'production') {
+    const appUrl = `http://${HOST}:${PORT}/`;
+    import('open')
+      .then(({ default: openBrowser }) => openBrowser(appUrl))
+      .catch((err) => console.warn('Could not open browser:', err.message));
+  }
 
   await new Promise((resolve) => httpServer.on('close', resolve));
 };

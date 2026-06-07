@@ -1,12 +1,28 @@
-const { fetchProductHistory } = require('../services/tmsModulesService');
+const {
+  fetchProductHistory,
+  fetchProductHistoryLedger,
+} = require('../services/tmsModulesService');
 
 const getProductHistory = async (req, res) => {
   try {
+    const productId = req.query.productId || req.query.product_id || '';
+    const partyId = req.query.partyId || req.query.accountId || '';
+    const fromDate = req.query.fromDate || '';
+    const toDate = req.query.toDate || '';
+
+    if (productId) {
+      const result = await fetchProductHistoryLedger({
+        productId,
+        partyId: partyId || null,
+        fromDate,
+        toDate,
+      });
+      return res.json(result);
+    }
+
     const search = req.query.search || '';
     const type = req.query.type || '';
     const accountId = req.query.accountId || '';
-    const fromDate = req.query.fromDate || '';
-    const toDate = req.query.toDate || '';
     const limit = req.query.limit ? Number(req.query.limit) : 1000;
 
     const history = await fetchProductHistory(search, limit, {

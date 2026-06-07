@@ -419,6 +419,174 @@ async function fetchProductHistory(search = '', limit = DEFAULT_LIMIT, filters =
   }));
 }
 
+async function fetchProductHistoryLedger({ productId, partyId, fromDate, toDate }) {
+  const resolveLineQty = (qty, rate, amount) => {
+    const q = parseFloat(qty) || 0;
+    if (q > 0) return q;
+    const r = parseFloat(rate) || 0;
+    const a = parseFloat(amount) || 0;
+    if (r > 0 && a > 0) return Math.round((a / r) * 1000) / 1000;
+    return 0;
+  };
+
+  const effectiveQtySql = `
+    CASE
+      WHEN ISNULL(p.Qty, 0) > 0 THEN p.Qty
+      WHEN ISNULL(p.Rate, 0) > 0 THEN ISNULL(p.VEST, 0) / p.Rate
+      ELSE 0
+    END
+  `;
+
+  const emptySummary = {
+    lastPurchaseRate: 0,
+    lastSaleRate: 0,
+    totalIn: 0,
+    totalOut: 0,
+    stockBalance: 0,
+    broughtForwardQty: 0,
+  };
+  if (!productId) {
+    return { summary: emptySummary, rows: [] };
+  }
+
+  const pool = await getPool();
+  const pid = Number(productId);
+  const partyClause = partyId ? ' AND d.Acid = @partyId' : '';
+  const typeFilter = `d.Type IN ('Sale', 'Purchase', 'Sale Return', 'Purchase Return')`;
+
+  const bindBase = (request) => {
+    request.input('productId', sql.Int, pid);
+    if (partyId) request.input('partyId', sql.Int, Number(partyId));
+    return request;
+  };
+
+  let bfIn = 0;
+  let bfOut = 0;
+  if (fromDate) {
+    const bfRes = await bindBase(pool.request())
+      .input('fromDate', sql.DateTime, new Date(`${fromDate}T00:00:00`))
+      .query(`
+        SELECT
+          SUM(CASE WHEN d.Type IN ('Purchase','Sale Return') THEN ${effectiveQtySql} ELSE 0 END) AS totalIn,
+          SUM(CASE WHEN d.Type IN ('Sale','Purchase Return') THEN ${effectiveQtySql} ELSE 0 END) AS totalOut
+        FROM PSProduct p WITH (NOLOCK)
+        INNER JOIN PSDetail d WITH (NOLOCK) ON p.Doc = d.Doc AND p.Type = d.Type
+        WHERE p.Prid = @productId AND ${typeFilter} AND d.Date < @fromDate ${partyClause}
+      `);
+    bfIn = parseFloat(bfRes.recordset[0]?.totalIn) || 0;
+    bfOut = parseFloat(bfRes.recordset[0]?.totalOut) || 0;
+  }
+
+  const broughtForwardQty = bfIn - bfOut;
+
+  const lastPurRes = await bindBase(pool.request()).query(`
+    SELECT TOP 1 p.Rate
+    FROM PSProduct p WITH (NOLOCK)
+    INNER JOIN PSDetail d WITH (NOLOCK) ON p.Doc = d.Doc AND p.Type = d.Type
+    WHERE p.Prid = @productId AND d.Type = 'Purchase' AND ISNULL(p.Rate, 0) > 0
+    ORDER BY d.Date DESC, d.Doc DESC
+  `);
+
+  const lastSaleRes = await bindBase(pool.request()).query(`
+    SELECT TOP 1 p.Rate
+    FROM PSProduct p WITH (NOLOCK)
+    INNER JOIN PSDetail d WITH (NOLOCK) ON p.Doc = d.Doc AND p.Type = d.Type
+    WHERE p.Prid = @productId AND d.Type = 'Sale' AND ISNULL(p.Rate, 0) > 0
+    ORDER BY d.Date DESC, d.Doc DESC
+  `);
+
+  let dateClause = '';
+  const txReq = bindBase(pool.request());
+  if (fromDate) {
+    txReq.input('fromDate', sql.DateTime, new Date(`${fromDate}T00:00:00`));
+    dateClause += ' AND d.Date >= @fromDate';
+  }
+  if (toDate) {
+    txReq.input('toDate', sql.DateTime, new Date(`${toDate}T23:59:59`));
+    dateClause += ' AND d.Date <= @toDate';
+  }
+
+  const txRes = await txReq.query(`
+    SELECT
+      d.Date,
+      d.Doc,
+      d.Type,
+      p.Qty,
+      p.Rate,
+      p.VEST AS amount,
+      c.Subsidary AS partyName
+    FROM PSProduct p WITH (NOLOCK)
+    INNER JOIN PSDetail d WITH (NOLOCK) ON p.Doc = d.Doc AND p.Type = d.Type
+    LEFT JOIN COA c WITH (NOLOCK) ON d.Acid = c.Id
+    WHERE p.Prid = @productId AND ${typeFilter} ${dateClause} ${partyClause}
+    ORDER BY d.Date ASC, d.Doc ASC
+  `);
+
+  const rows = [];
+  let balance = broughtForwardQty;
+  let periodIn = 0;
+  let periodOut = 0;
+
+  if (fromDate) {
+    rows.push({
+      sr: 1,
+      date: formatDisplayDate(new Date(`${fromDate}T00:00:00`)),
+      docNo: '',
+      type: 'Brought Forward',
+      qtyIn: '',
+      qtyOut: '',
+      rate: '',
+      amount: '',
+      balanceQty: broughtForwardQty,
+      partyName: 'N/A',
+      rowKind: 'brought-forward',
+    });
+  }
+
+  txRes.recordset.forEach((row) => {
+    const rate = parseFloat(row.Rate) || 0;
+    const amount = parseFloat(row.amount) || 0;
+    const qty = resolveLineQty(row.Qty, rate, amount);
+    const isIn = row.Type === 'Purchase' || row.Type === 'Sale Return';
+    const isOut = row.Type === 'Sale' || row.Type === 'Purchase Return';
+    const qtyIn = isIn ? qty : 0;
+    const qtyOut = isOut ? qty : 0;
+    periodIn += qtyIn;
+    periodOut += qtyOut;
+    balance += qtyIn - qtyOut;
+
+    rows.push({
+      sr: rows.length + 1,
+      date: formatDisplayDate(row.Date),
+      docNo: row.Doc,
+      type: row.Type,
+      qtyIn: qtyIn || '',
+      qtyOut: qtyOut || '',
+      rate,
+      amount: amount || qty * rate,
+      balanceQty: balance,
+      partyName: row.partyName || '',
+      rowKind: isOut ? 'sale' : 'purchase',
+    });
+  });
+
+  rows.forEach((row, index) => {
+    row.sr = index + 1;
+  });
+
+  return {
+    summary: {
+      lastPurchaseRate: parseFloat(lastPurRes.recordset[0]?.Rate) || 0,
+      lastSaleRate: parseFloat(lastSaleRes.recordset[0]?.Rate) || 0,
+      totalIn: periodIn,
+      totalOut: periodOut,
+      stockBalance: balance,
+      broughtForwardQty,
+    },
+    rows,
+  };
+}
+
 function mapLedgerRow(row) {
   return {
     id: row.Id,
@@ -710,6 +878,43 @@ async function fetchCompanies(search = '', limit = DEFAULT_LIMIT) {
   return filterAllNullColumns(mapped, COMPANY_LABELS, COMPANY_NUMERIC_KEYS);
 }
 
+async function upsertCompanyColor(name, color) {
+  const pool = await getPool();
+  const trimmed = (name || '').trim();
+  if (!trimmed) return null;
+
+  const colorStr = String(color);
+
+  const existing = await pool
+    .request()
+    .input('name', sql.NVarChar, trimmed)
+    .query(`
+      SELECT TOP 1 id, name FROM Company
+      WHERE LTRIM(RTRIM(name)) = @name
+    `);
+
+  if (existing.recordset.length > 0) {
+    await pool
+      .request()
+      .input('id', sql.Int, existing.recordset[0].id)
+      .input('color', sql.NVarChar, colorStr)
+      .query(`UPDATE Company SET color = @color WHERE id = @id`);
+    return existing.recordset[0].id;
+  }
+
+  const nextIdResult = await pool.request().query(
+    `SELECT ISNULL(MAX(id), 0) + 1 AS nextId FROM Company`,
+  );
+  const nextId = nextIdResult.recordset[0].nextId;
+  await pool
+    .request()
+    .input('id', sql.Int, nextId)
+    .input('name', sql.NVarChar, trimmed)
+    .input('color', sql.NVarChar, colorStr)
+    .query(`INSERT INTO Company (id, name, color) VALUES (@id, @name, @color)`);
+  return nextId;
+}
+
 function mapTempLedgerRow(row) {
   return {
     id: row.ID ?? null,
@@ -997,6 +1202,7 @@ module.exports = {
   fetchItems,
   fetchStock,
   fetchProductHistory,
+  fetchProductHistoryLedger,
   fetchPSDetail,
   fetchLedger,
   fetchLedgerOpeningBalance,
@@ -1005,6 +1211,7 @@ module.exports = {
   fetchTempStock,
   fetchTempPnL,
   fetchCompanies,
+  upsertCompanyColor,
   fetchSalesInvoices,
   fetchSalesInvoiceById,
 };
