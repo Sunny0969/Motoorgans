@@ -1,0 +1,555 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../utils/api';
+import ProductSearchModal from '../components/ProductSearchModal';
+
+const initialEntry = {
+  productId: '',
+  productCode: '',
+  productName: '',
+  uom: 'PCS',
+  packingSize: '',
+  packing: '',
+  pcs: '',
+  totalPcs: '',
+  difference: '',
+  locationId: '',
+  locationName: '',
+  availableStock: '0',
+};
+
+const calcTotalPcs = (packing, packingSize, pcs) => {
+  const pk = parseFloat(packing) || 0;
+  const ps = parseFloat(packingSize) || 0;
+  const pc = parseFloat(pcs) || 0;
+  if (ps > 0) return pk * ps + pc;
+  return pc;
+};
+
+const calcDifference = (totalPcs, availableStock) => {
+  const t = parseFloat(totalPcs) || 0;
+  const a = parseFloat(availableStock) || 0;
+  return t - a;
+};
+
+const toInputDate = (value) => {
+  if (!value) return new Date().toISOString().slice(0, 10);
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+  return d.toISOString().slice(0, 10);
+};
+
+const formatDiff = (n) => {
+  const v = parseFloat(n) || 0;
+  return v > 0 ? `+${v}` : String(v);
+};
+
+const StockAdjustment = () => {
+  const navigate = useNavigate();
+  const [header, setHeader] = useState({
+    invoiceNo: '',
+    date: toInputDate(),
+    description: '',
+  });
+  const [entry, setEntry] = useState(initialEntry);
+  const [lines, setLines] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [productsList, setProductsList] = useState([]);
+  const [editIndex, setEditIndex] = useState(null);
+  const [savedDoc, setSavedDoc] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [showProductModal, setShowProductModal] = useState(false);
+
+  const { totalPcsFooter, totalDiffFooter } = useMemo(() => ({
+    totalPcsFooter: lines.reduce((s, l) => s + (parseFloat(l.totalPcs) || 0), 0),
+    totalDiffFooter: lines.reduce((s, l) => s + (parseFloat(l.difference) || 0), 0),
+  }), [lines]);
+
+  const recalcEntryTotals = useCallback((prev) => {
+    const totalPcs = calcTotalPcs(prev.packing, prev.packingSize, prev.pcs);
+    const difference = calcDifference(totalPcs, prev.availableStock);
+    return {
+      ...prev,
+      totalPcs: String(totalPcs),
+      difference: String(difference),
+    };
+  }, []);
+
+  const loadLocations = useCallback(async () => {
+    try {
+      const res = await api.get('/stock-adjustments/locations');
+      setLocations(Array.isArray(res.data?.data) ? res.data.data : []);
+    } catch {
+      setLocations([]);
+    }
+  }, []);
+
+  const loadProducts = useCallback(async () => {
+    try {
+      const res = await api.get('/products', { params: { all: '1', limit: 10000 } });
+      setProductsList(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setProductsList([]);
+    }
+  }, []);
+
+  const resetEntry = useCallback(() => {
+    setEntry(initialEntry);
+    setEditIndex(null);
+  }, []);
+
+  const applyInvoice = useCallback((data) => {
+    if (!data) return;
+    setHeader({
+      invoiceNo: String(data.doc || data.invoiceNo || ''),
+      date: toInputDate(data.date),
+      description: data.description || '',
+    });
+    setSavedDoc(data.doc);
+    setLines(
+      (data.items || []).map((item, i) => ({
+        sr: i + 1,
+        productId: item.productId,
+        productCode: item.productCode || '',
+        productName: item.productName || '',
+        uom: item.uom || 'PCS',
+        packing: item.packing ?? 0,
+        packingSize: item.packingSize ?? 0,
+        packingDisplay: item.packingDisplay || String(item.packing ?? ''),
+        pcs: item.pcs ?? 0,
+        totalPcs: item.totalPcs ?? 0,
+        difference: item.difference ?? 0,
+        availableBefore: item.availableBefore ?? 0,
+        locationId: item.locationId ?? '',
+        locationName: item.locationName || '',
+      })),
+    );
+    resetEntry();
+  }, [resetEntry]);
+
+  const loadNextInvoice = useCallback(async () => {
+    try {
+      const res = await api.get('/stock-adjustments/next-number');
+      setHeader((h) => ({ ...h, invoiceNo: String(res.data.nextNumber || res.data.invoiceNo) }));
+      setSavedDoc(null);
+    } catch {
+      setHeader((h) => ({ ...h, invoiceNo: '1' }));
+    }
+  }, []);
+
+  const loadLatest = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.get('/stock-adjustments/latest');
+      applyInvoice(res.data.data);
+    } catch (err) {
+      if (err.response?.status === 404) {
+        await loadNextInvoice();
+        setLines([]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [applyInvoice, loadNextInvoice]);
+
+  useEffect(() => {
+    loadLocations();
+    loadProducts();
+    loadLatest();
+  }, [loadLocations, loadProducts, loadLatest]);
+
+  const loadProductInfo = async (productId, locationId) => {
+    if (!productId) return;
+    try {
+      const res = await api.get(`/stock-adjustments/product/${productId}`, {
+        params: { locationId: locationId ?? '' },
+      });
+      const p = res.data.data;
+      setEntry((prev) => {
+        const next = {
+          ...prev,
+          productId: String(p.productId),
+          productCode: p.productCode || '',
+          productName: p.productName || '',
+          uom: p.uom || 'PCS',
+          packingSize: p.packingSize > 0 ? String(p.packingSize) : '',
+          availableStock: String(p.availableStock ?? 0),
+        };
+        return recalcEntryTotals(next);
+      });
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleProductSelect = (product) => {
+    const id = product.id || product._id;
+    setEntry((prev) => ({
+      ...prev,
+      productId: String(id),
+      productCode: product.code || '',
+      productName: product.name || '',
+      packingSize: product.packing > 0 ? String(product.packing) : '',
+      uom: product.unit || product.uom || 'PCS',
+    }));
+    setShowProductModal(false);
+    loadProductInfo(id, entry.locationId);
+  };
+
+  const handleEntryChange = (e) => {
+    const { name, value } = e.target;
+    if (name === 'productId') {
+      setEntry((prev) => ({ ...prev, productId: value }));
+      if (value) loadProductInfo(value, entry.locationId);
+      return;
+    }
+    if (name === 'locationId') {
+      const loc = locations.find((l) => String(l.id) === String(value));
+      setEntry((prev) => {
+        const next = {
+          ...prev,
+          locationId: value,
+          locationName: loc?.name || '',
+        };
+        if (prev.productId) loadProductInfo(prev.productId, value);
+        return next;
+      });
+      return;
+    }
+    setEntry((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === 'packing' || name === 'pcs' || name === 'difference') {
+        if (name === 'difference') {
+          const diff = parseFloat(value) || 0;
+          const avail = parseFloat(prev.availableStock) || 0;
+          const totalPcs = avail + diff;
+          return {
+            ...next,
+            totalPcs: String(totalPcs),
+            difference: value,
+          };
+        }
+        return recalcEntryTotals(next);
+      }
+      return next;
+    });
+  };
+
+  const buildLine = () => {
+    const totalPcs = parseFloat(entry.totalPcs) || calcTotalPcs(entry.packing, entry.packingSize, entry.pcs);
+    const difference = parseFloat(entry.difference) || calcDifference(totalPcs, entry.availableStock);
+    if (!entry.productId) throw new Error('Select a product first.');
+    if (difference === 0) throw new Error('Difference is zero — adjust physical qty or difference.');
+    const ps = parseFloat(entry.packingSize) || 0;
+    const pk = parseFloat(entry.packing) || 0;
+    const packingDisplay = ps > 0 && pk > 0 ? `${pk} x ${ps}` : (pk > 0 ? String(pk) : '-');
+    return {
+      productId: Number(entry.productId),
+      productCode: entry.productCode,
+      productName: entry.productName,
+      uom: entry.uom,
+      packing: pk,
+      packingSize: ps,
+      packingDisplay,
+      pcs: parseFloat(entry.pcs) || 0,
+      totalPcs,
+      difference,
+      availableBefore: parseFloat(entry.availableStock) || 0,
+      locationId: entry.locationId,
+      locationName: entry.locationName,
+    };
+  };
+
+  const handleAdd = () => {
+    try {
+      const line = buildLine();
+      setLines((prev) => [...prev, { sr: prev.length + 1, ...line }]);
+      resetEntry();
+      setMessage(null);
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleUpdate = () => {
+    if (editIndex === null) {
+      setMessage({ type: 'error', text: 'Select a row to update.' });
+      return;
+    }
+    try {
+      const line = buildLine();
+      setLines((prev) => {
+        const next = [...prev];
+        next[editIndex] = { sr: editIndex + 1, ...line };
+        return next.map((r, i) => ({ ...r, sr: i + 1 }));
+      });
+      resetEntry();
+      setMessage(null);
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleRemove = () => {
+    if (editIndex === null) return;
+    setLines((prev) => prev.filter((_, i) => i !== editIndex).map((r, i) => ({ ...r, sr: i + 1 })));
+    resetEntry();
+  };
+
+  const handleRowClick = (index) => {
+    const row = lines[index];
+    setEditIndex(index);
+    setEntry({
+      productId: String(row.productId),
+      productCode: row.productCode || '',
+      productName: row.productName || '',
+      uom: row.uom || 'PCS',
+      packingSize: row.packingSize > 0 ? String(row.packingSize) : '',
+      packing: String(row.packing ?? ''),
+      pcs: String(row.pcs ?? ''),
+      totalPcs: String(row.totalPcs ?? ''),
+      difference: String(row.difference ?? ''),
+      availableStock: String(row.availableBefore ?? ''),
+      locationId: row.locationId != null ? String(row.locationId) : '',
+      locationName: row.locationName || '',
+    });
+    loadProductInfo(row.productId, row.locationId);
+  };
+
+  const handleRefresh = async () => {
+    setLines([]);
+    setMessage(null);
+    resetEntry();
+    await loadNextInvoice();
+  };
+
+  const loadByInvoice = async () => {
+    const inv = header.invoiceNo?.trim();
+    if (!inv) return;
+    setLoading(true);
+    try {
+      const res = await api.get(`/stock-adjustments/${inv}`);
+      applyInvoice(res.data.data);
+      setMessage({ type: 'success', text: `Loaded adjustment #${inv}.` });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.message || 'Not found.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveInvoice = async (isUpdate) => {
+    if (!lines.length) {
+      setMessage({ type: 'error', text: 'Add at least one line.' });
+      return;
+    }
+    setLoading(true);
+    setMessage(null);
+    try {
+      const payload = {
+        date: header.date,
+        description: header.description,
+        items: lines.map((l) => ({
+          productId: l.productId,
+          packets: l.packing,
+          packing: l.packing,
+          packingSize: l.packingSize,
+          pcs: l.pcs,
+          difference: l.difference,
+          locationId: l.locationId,
+          locationName: l.locationName,
+        })),
+      };
+      const res = savedDoc && isUpdate
+        ? await api.put(`/stock-adjustments/${savedDoc}`, payload)
+        : await api.post('/stock-adjustments', payload);
+      applyInvoice(res.data.data);
+      setMessage({ type: 'success', text: res.data.message || 'Saved.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.message || 'Save failed.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!savedDoc) {
+      setMessage({ type: 'error', text: 'No saved record.' });
+      return;
+    }
+    if (!window.confirm(`Delete stock adjustment #${savedDoc}?`)) return;
+    setLoading(true);
+    try {
+      await api.delete(`/stock-adjustments/${savedDoc}`);
+      setMessage({ type: 'success', text: `Deleted #${savedDoc}.` });
+      setLines([]);
+      setSavedDoc(null);
+      await loadNextInvoice();
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.message || 'Delete failed.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const diffStyle = (val) => {
+    const n = parseFloat(val) || 0;
+    if (n > 0) return { color: '#006400', fontWeight: 'bold' };
+    if (n < 0) return { color: '#c00', fontWeight: 'bold' };
+    return {};
+  };
+
+  return (
+    <div style={s.page}>
+      <div style={s.titleBar}>Stock Adjustment</div>
+
+      {message && (
+        <div style={message.type === 'success' ? s.msgOk : s.msgErr}>{message.text}</div>
+      )}
+
+      <div style={s.headerBox}>
+        <label style={s.lbl}>Invoice #</label>
+        <input
+          style={s.inpSm}
+          value={header.invoiceNo}
+          onChange={(e) => setHeader((h) => ({ ...h, invoiceNo: e.target.value }))}
+          onBlur={loadByInvoice}
+          onKeyDown={(e) => e.key === 'Enter' && loadByInvoice()}
+        />
+        <label style={s.lbl}>Date</label>
+        <input type="date" style={s.inpDate} value={header.date} onChange={(e) => setHeader((h) => ({ ...h, date: e.target.value }))} />
+        <label style={s.lbl}>Description</label>
+        <input style={s.inpDesc} value={header.description} onChange={(e) => setHeader((h) => ({ ...h, description: e.target.value }))} />
+      </div>
+
+      <div style={s.entryBox}>
+        <div style={s.entryRow}>
+          <label style={s.lbl}>Product ID</label>
+          <input style={s.inpId} value={entry.productCode} readOnly />
+          <label style={s.lbl}>Select Product</label>
+          <select style={s.selProduct} name="productId" value={entry.productId} onChange={handleEntryChange}>
+            <option value="">— Select —</option>
+            {productsList.map((p) => (
+              <option key={p.id || p._id} value={p.id || p._id}>{p.code} — {p.name}</option>
+            ))}
+          </select>
+          <button type="button" style={s.btnSmall} onClick={() => setShowProductModal(true)}>…</button>
+          <label style={s.lbl}>Location</label>
+          <select style={s.selLoc} name="locationId" value={entry.locationId} onChange={handleEntryChange}>
+            <option value="">—</option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>{loc.name}</option>
+            ))}
+          </select>
+          <label style={s.lbl}>Packing</label>
+          <input style={s.inpQty} name="packing" value={entry.packing} onChange={handleEntryChange} type="number" min="0" step="any" />
+          <label style={s.lbl}>Pc(s)</label>
+          <input style={s.inpQty} name="pcs" value={entry.pcs} onChange={handleEntryChange} type="number" min="0" step="any" />
+          <label style={s.lbl}>Total Pcs.</label>
+          <input style={s.inpQty} name="totalPcs" value={entry.totalPcs} onChange={handleEntryChange} type="number" step="any" />
+          <label style={s.lbl}>Difference</label>
+          <input style={{ ...s.inpQty, ...diffStyle(entry.difference) }} name="difference" value={entry.difference} onChange={handleEntryChange} type="number" step="any" title="Physical count minus available stock" />
+        </div>
+        <div style={s.stockBar}>
+          <span>Available Stock: <strong>{entry.availableStock || '0'}</strong></span>
+          {entry.locationName && <span style={{ marginLeft: 12 }}>at {entry.locationName}</span>}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            <button type="button" style={s.btn} onClick={resetEntry}>Reset</button>
+            <button type="button" style={s.btn} onClick={handleAdd}>Add</button>
+            <button type="button" style={s.btn} onClick={handleUpdate} disabled={editIndex === null}>Update</button>
+            <button type="button" style={s.btn} onClick={handleRemove} disabled={editIndex === null}>Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={s.sectionLabel}>Product(s) Information</div>
+      <div style={s.gridWrap}>
+        <table style={s.table}>
+          <thead>
+            <tr>
+              <th style={s.th}>Sr.#</th>
+              <th style={s.th}>Product</th>
+              <th style={s.th}>U.O.M</th>
+              <th style={s.th}>Packing</th>
+              <th style={s.th}>Pc(s)</th>
+              <th style={s.th}>Location</th>
+              <th style={s.th}>Diff.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.length === 0 ? (
+              <tr><td colSpan={7} style={s.emptyCell}>—</td></tr>
+            ) : (
+              lines.map((row, idx) => (
+                <tr key={`${row.productId}-${idx}`} style={editIndex === idx ? s.rowSel : s.row} onClick={() => handleRowClick(idx)}>
+                  <td style={s.td}>{row.sr}</td>
+                  <td style={{ ...s.td, textAlign: 'left' }}>{row.productName}</td>
+                  <td style={s.td}>{row.uom}</td>
+                  <td style={s.td}>{row.packingDisplay ?? row.packing}</td>
+                  <td style={s.td}>{row.pcs}</td>
+                  <td style={s.td}>{row.locationName || '—'}</td>
+                  <td style={{ ...s.td, ...diffStyle(row.difference) }}>{formatDiff(row.difference)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={s.totalsRow}>
+        <label style={s.lbl}>Total Pcs.</label>
+        <input style={s.inpTotal} value={totalPcsFooter} readOnly />
+        <label style={s.lbl}>Total Difference</label>
+        <input style={{ ...s.inpTotal, ...diffStyle(totalDiffFooter) }} value={formatDiff(totalDiffFooter)} readOnly />
+      </div>
+
+      <div style={s.actionBar}>
+        <button type="button" style={s.actionBtn} onClick={handleRefresh} disabled={loading}>↻ Refresh</button>
+        <button type="button" style={s.actionBtn} onClick={() => saveInvoice(false)} disabled={loading || !lines.length}>💾 Save Record</button>
+        <button type="button" style={s.actionBtn} onClick={() => saveInvoice(true)} disabled={loading || !savedDoc || !lines.length}>✎ Update</button>
+        <button type="button" style={s.actionBtn} onClick={handleDelete} disabled={loading || !savedDoc}>✕ Delete Record</button>
+        <button type="button" style={{ ...s.actionBtn, marginLeft: 'auto', background: '#8b0000' }} onClick={() => navigate('/')}>✕ Close</button>
+      </div>
+
+      {showProductModal && (
+        <ProductSearchModal isOpen={showProductModal} onClose={() => setShowProductModal(false)} onSelectProduct={handleProductSelect} />
+      )}
+    </div>
+  );
+};
+
+const s = {
+  page: { fontFamily: 'Tahoma, Segoe UI, sans-serif', fontSize: 12, background: '#c0c0c0', minHeight: '100vh', padding: 8, boxSizing: 'border-box' },
+  titleBar: { background: 'linear-gradient(180deg, #4a4a4a 0%, #2d2d2d 100%)', color: '#fff', textAlign: 'center', padding: '6px 8px', fontWeight: 'bold', border: '1px solid #1a1a1a', marginBottom: 6 },
+  msgOk: { background: '#d4edda', color: '#155724', padding: 8, marginBottom: 6, border: '1px solid #a5d6a7' },
+  msgErr: { background: '#f8d7da', color: '#721c24', padding: 8, marginBottom: 6, border: '1px solid #ef9a9a' },
+  headerBox: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: 8, background: '#d4d4d4', border: '1px solid #888', marginBottom: 6 },
+  entryBox: { padding: 8, background: '#d4d4d4', border: '1px solid #888', marginBottom: 4 },
+  entryRow: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 6 },
+  stockBar: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, fontSize: 12 },
+  sectionLabel: { padding: '4px 8px', background: '#b8b8b8', border: '1px solid #888', borderBottom: 'none', fontWeight: 'bold' },
+  lbl: { fontWeight: 500, whiteSpace: 'nowrap' },
+  inpSm: { width: 56, padding: '2px 4px', border: '1px solid #888' },
+  inpDate: { width: 130, padding: '2px 4px', border: '1px solid #888' },
+  inpDesc: { flex: 1, minWidth: 160, padding: '2px 4px', border: '1px solid #888' },
+  inpId: { width: 48, padding: '2px 4px', border: '1px solid #888', background: '#f5f5f5' },
+  selProduct: { minWidth: 160, maxWidth: 260, padding: '2px 4px', border: '1px solid #888' },
+  selLoc: { minWidth: 90, padding: '2px 4px', border: '1px solid #888' },
+  inpQty: { width: 58, padding: '2px 4px', border: '1px solid #888' },
+  btnSmall: { padding: '2px 8px', border: '1px solid #888', background: '#e8e8e8', cursor: 'pointer' },
+  btn: { padding: '3px 12px', border: '1px solid #888', background: 'linear-gradient(180deg, #f0f0f0, #d8d8d8)', cursor: 'pointer' },
+  gridWrap: { border: '1px solid #888', marginBottom: 6, maxHeight: 300, overflow: 'auto' },
+  table: { width: '100%', borderCollapse: 'collapse', background: '#fff', fontSize: 11 },
+  th: { background: '#d0d0d0', border: '1px solid #888', padding: '4px 6px', fontWeight: 'bold' },
+  td: { border: '1px solid #999', padding: '3px 6px', textAlign: 'center' },
+  row: { cursor: 'pointer' },
+  rowSel: { cursor: 'pointer', background: '#b3d9ff' },
+  emptyCell: { textAlign: 'center', padding: 16, color: '#666' },
+  totalsRow: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, padding: '6px 8px', background: '#d4d4d4', border: '1px solid #888', marginBottom: 6 },
+  inpTotal: { width: 80, padding: '2px 4px', border: '1px solid #888', fontWeight: 'bold', textAlign: 'right' },
+  actionBar: { display: 'flex', flexWrap: 'wrap', gap: 6, padding: 8, background: '#4a4a4a', border: '1px solid #333' },
+  actionBtn: { padding: '6px 12px', border: '1px solid #666', background: '#6a6a6a', color: '#fff', cursor: 'pointer', fontSize: 11 },
+};
+
+export default StockAdjustment;
